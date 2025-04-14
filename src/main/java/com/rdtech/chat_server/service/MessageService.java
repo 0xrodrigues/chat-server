@@ -1,5 +1,6 @@
 package com.rdtech.chat_server.service;
 
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
@@ -10,13 +11,11 @@ import java.util.List;
 
 @Service
 @Slf4j
+@RequiredArgsConstructor
 public class MessageService {
+
     private final RedisTemplate<String, String> redisTemplate;
     private static final Duration TTL = Duration.ofHours(1);
-
-    public MessageService(RedisTemplate<String, String> redisTemplate) {
-        this.redisTemplate = redisTemplate;
-    }
 
     public void storeMessage(String toPubKey, String message) {
         String key = "queue:" + toPubKey;

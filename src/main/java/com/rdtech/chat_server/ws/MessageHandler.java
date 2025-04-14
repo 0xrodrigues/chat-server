@@ -20,21 +20,44 @@ public class MessageHandler implements WebSocketHandler {
     private final KafkaPublisher kafkaPublisher;
     private final SessionManager sessionManager;
     private final MessageService messageService;
+    private final ObjectMapper mapper;
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
-        sessionManager.addSession(session);
-        log.info("Cliente conectado: {}", session.getId());
+        String query = session.getUri() != null ? session.getUri().getQuery() : null;
+        String pubKey = null;
 
-        String pubKey = extractPubKeyFromSession(session);
-        List<String> pending = messageService.retrieveMessages(pubKey);
+        if (query != null) {
+            for (String param : query.split("&")) {
+                if (param.startsWith("pub=")) {
+                    pubKey = param.substring("pub=".length());
+                    break;
+                }
+            }
+        }
 
-        for (String msg : pending) {
+        if (pubKey != null && !pubKey.isEmpty()) {
+            sessionManager.addSession(pubKey, session);
+            log.info("Cliente conectado: {} (pubKey: {})", session.getId(), pubKey);
+
+            List<String> pendingMessages = messageService.retrieveMessages(pubKey);
+            log.info("Encontradas {} mensagens pendentes para {}", pendingMessages.size(), pubKey);
+
+            for (String msg : pendingMessages) {
+                try {
+                    session.sendMessage(new TextMessage(msg));
+                    log.info("Enviando pendente: {}", msg);
+                } catch (Exception e) {
+                    log.error("Erro ao enviar mensagem pendente: {}", e.getMessage());
+                }
+            }
+
+        } else {
+            log.warn("Conexão sem pubKey. Encerrando sessão...");
             try {
-                session.sendMessage(new TextMessage(msg));
-                log.info("Entregando mensagem pendente para {}: {}", pubKey, msg);
+                session.close();
             } catch (Exception e) {
-                log.error("Erro ao entregar mensagem pendente: {}", e.getMessage());
+                log.error("Erro ao fechar sessão inválida", e);
             }
         }
     }
@@ -48,32 +71,38 @@ public class MessageHandler implements WebSocketHandler {
     @Override
     public void handleMessage(WebSocketSession session, WebSocketMessage<?> message) {
         if (message instanceof TextMessage text) {
-            String json = text.getPayload();
-            log.info("JSON recebido: {}", json);
+            String messageAsString = text.getPayload();
+            log.info("JSON recebido: {}", messageAsString);
 
             try {
                 ObjectMapper mapper = new ObjectMapper();
-                JsonNode node = mapper.readTree(json);
-                String to = node.get("to").asText();
+                JsonNode json = mapper.readTree(messageAsString);
+                String to = json.get("to").asText();
 
-                messageService.storeMessage(to, json);
-                log.info("Armazenando mensagem para: {}", to);
+                WebSocketSession targetSession = sessionManager.getSession(to);
 
-                kafkaPublisher.send("chat-mensagens", json);
+                if (targetSession != null && targetSession.isOpen()) {
+                    targetSession.sendMessage(new TextMessage(messageAsString));
+                    log.info("🔄 Mensagem entregue diretamente para: {}", to);
+                } else {
+                    messageService.storeMessage(to, messageAsString);
+                    log.info("📦 Destinatário offline, mensagem salva no Redis para: {}", to);
+                }
+
+                kafkaPublisher.send("chat-mensagens", messageAsString);
 
             } catch (Exception e) {
-                log.info("❌ Erro ao processar mensagem: {}", e.getMessage());
+                log.error("Erro ao processar mensagem: {}", e.getMessage(), e);
             }
         }
     }
 
-    private String extractPubKeyFromSession(WebSocketSession session) {
+    private String extractPubKey(WebSocketSession session) {
         String query = Objects.requireNonNull(session.getUri()).getQuery();
         if (query != null && query.startsWith("pub=")) {
             return query.substring(4);
-        } else {
-            throw new IllegalStateException("Pubkey não encontrada na URL de conexão");
         }
+        throw new IllegalStateException("Pubkey não fornecida na URL");
     }
 
     @Override public void handleTransportError(WebSocketSession session, Throwable ex) {}
