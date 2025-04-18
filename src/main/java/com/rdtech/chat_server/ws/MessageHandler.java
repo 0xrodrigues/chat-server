@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.*;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Objects;
 
@@ -17,10 +18,8 @@ import java.util.Objects;
 @Slf4j
 public class MessageHandler implements WebSocketHandler {
 
-    private final KafkaPublisher kafkaPublisher;
     private final SessionManager sessionManager;
     private final MessageService messageService;
-    private final ObjectMapper mapper;
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
@@ -89,22 +88,27 @@ public class MessageHandler implements WebSocketHandler {
                     log.info("📦 Destinatário offline, mensagem salva no Redis para: {}", to);
                 }
 
-                kafkaPublisher.send("chat-mensagens", messageAsString);
-
             } catch (Exception e) {
                 log.error("Erro ao processar mensagem: {}", e.getMessage(), e);
             }
+        } else {
+            log.warn("Mensagem WebSocket ignorada: tipo não suportado ({})", message.getClass().getSimpleName());
         }
     }
 
-    private String extractPubKey(WebSocketSession session) {
-        String query = Objects.requireNonNull(session.getUri()).getQuery();
-        if (query != null && query.startsWith("pub=")) {
-            return query.substring(4);
+    @Override
+    public void handleTransportError(WebSocketSession session, Throwable ex) {
+        log.error("Erro de transporte WebSocket: {}", ex.getMessage());
+        sessionManager.removeSession(session);
+        try {
+            session.close();
+        } catch (IOException e) {
+            log.error("Erro ao fechar sessão após falha de transporte: {}", e.getMessage());
         }
-        throw new IllegalStateException("Pubkey não fornecida na URL");
     }
 
-    @Override public void handleTransportError(WebSocketSession session, Throwable ex) {}
-    @Override public boolean supportsPartialMessages() { return false; }
+    @Override
+    public boolean supportsPartialMessages() {
+        return false;
+    }
 }
