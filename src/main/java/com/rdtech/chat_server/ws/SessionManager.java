@@ -21,4 +21,8 @@ public class SessionManager {
     public WebSocketSession getSession(String pubKey) {
         return sessions.get(pubKey);
     }
+
+    public Map<String, WebSocketSession> getAllSessions() {
+        return new ConcurrentHashMap<>(sessions);
+    }
 }
